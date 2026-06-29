@@ -1,12 +1,13 @@
-import { useState, useCallback } from 'react'
-import { useForm } from 'react-hook-form'
-import { useNavigate } from 'react-router-dom'
+import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useForm, useFieldArray } from 'react-hook-form'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { v4 as uuidv4 } from 'uuid'
-import type { Contrato, ContratoFormData, ModeloPagamento, FormaPagamento } from '../types'
+import type { Contrato, ContratoFormData, ModeloPagamento, FormaPagamento, TipoPessoa, EtapaPagamento, ModoServicos } from '../types'
 import {
   getPrestadorDefault,
   savePrestadorDefault,
   saveContrato,
+  getContrato,
   gerarNumeroContrato,
 } from '../storage'
 import { Toast } from '../components/Toast'
@@ -23,6 +24,7 @@ const defaultValues: ContratoFormData = {
     telefone: '',
   },
   cliente: {
+    tipoPessoa: 'fisica',
     nome: '',
     documento: '',
     endereco: '',
@@ -33,20 +35,32 @@ const defaultValues: ContratoFormData = {
     nome: '',
     descricao: '',
     exclusoes: '',
-    dataInicio: '',
-    dataEntrega: '',
+    prazoInicio: 7,
+    unidadeInicio: 'dias',
+    prazoEstimado: 30,
+    unidadePrazo: 'dias_uteis',
+    tolerancia: 5,
     rodasRevisao: 2,
   },
   pagamento: {
     valorTotal: 0,
     modelo: '50/50',
-    modeloPersonalizado: '',
+    etapas: [
+      { descricao: 'Assinatura do contrato', percentual: 50 },
+      { descricao: 'Entrega final do projeto', percentual: 50 },
+    ],
     forma: 'PIX',
     formaOutro: '',
   },
+  servicosAdicionais: {
+    modo: 'nenhum',
+    hospedagem: { incluso: false, meses: 12, valorMensal: 0 },
+    manutencao: { incluso: false, meses: 3, valorMensal: 0 },
+    pacoteMeses: 12,
+    pacoteValorMensal: 0,
+  },
   config: {
     cidade: '',
-    dataAssinatura: new Date().toISOString().split('T')[0],
     prazoValidade: 7,
   },
 }
@@ -67,6 +81,25 @@ const sectionTitleClass = 'text-sm font-bold uppercase tracking-widest text-indi
 
 export function NovoContrato() {
   const navigate = useNavigate()
+  const { id: editId } = useParams<{ id: string }>()
+  const [searchParams] = useSearchParams()
+  const baseId = searchParams.get('base')
+
+  const contratoExistente = useMemo(() => {
+    const targetId = editId || baseId
+    return targetId ? getContrato(targetId) : null
+  }, [editId, baseId])
+
+  const isEditing = !!editId && !!contratoExistente
+
+  function getFormValues(): ContratoFormData {
+    if (contratoExistente) {
+      const { id: _id, numero: _num, createdAt: _cr, status: _st, ...formData } = contratoExistente
+      return formData
+    }
+    return getInitialValues()
+  }
+
   const [toast, setToast] = useState<ToastState>(null)
   const [previewContrato, setPreviewContrato] = useState<Contrato | null>(null)
 
@@ -74,17 +107,55 @@ export function NovoContrato() {
     register,
     handleSubmit,
     watch,
+    control,
     formState: { errors },
-  } = useForm<ContratoFormData>({ defaultValues: getInitialValues() })
+  } = useForm<ContratoFormData>({ defaultValues: getFormValues() })
 
+  const { fields: etapasFields, replace: replaceEtapas, append: appendEtapa, remove: removeEtapa } = useFieldArray({
+    control,
+    name: 'pagamento.etapas',
+  })
+
+  const tipoPessoa = watch('cliente.tipoPessoa') as TipoPessoa
   const modeloPagamento = watch('pagamento.modelo') as ModeloPagamento
   const formaPagamento = watch('pagamento.forma') as FormaPagamento
+  const modoServicos = watch('servicosAdicionais.modo') as ModoServicos
+  const hospedagemInclusa = watch('servicosAdicionais.hospedagem.incluso')
+  const manutencaoInclusa = watch('servicosAdicionais.manutencao.incluso')
+
+  const etapasDefaults: Record<ModeloPagamento, EtapaPagamento[]> = {
+    '50/50': [
+      { descricao: 'Assinatura do contrato', percentual: 50 },
+      { descricao: 'Entrega final do projeto', percentual: 50 },
+    ],
+    '33/33/33': [
+      { descricao: 'Assinatura do contrato', percentual: 33 },
+      { descricao: '', percentual: 33 },
+      { descricao: 'Entrega final do projeto', percentual: 34 },
+    ],
+    'personalizado': [
+      { descricao: 'Assinatura do contrato', percentual: 50 },
+      { descricao: 'Entrega final do projeto', percentual: 50 },
+    ],
+  }
+
+  useEffect(() => {
+    replaceEtapas(etapasDefaults[modeloPagamento])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modeloPagamento])
 
   const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type })
   }, [])
 
   function buildContrato(data: ContratoFormData, status: 'rascunho' | 'gerado'): Contrato {
+    if (isEditing && contratoExistente) {
+      return {
+        ...contratoExistente,
+        status,
+        ...data,
+      }
+    }
     return {
       id: uuidv4(),
       numero: gerarNumeroContrato(),
@@ -98,7 +169,7 @@ export function NovoContrato() {
     savePrestadorDefault(data.prestador)
     const contrato = buildContrato(data, 'rascunho')
     saveContrato(contrato)
-    showToast('Rascunho salvo com sucesso!')
+    showToast(isEditing ? 'Contrato atualizado!' : 'Rascunho salvo com sucesso!')
   }
 
   function onGerarContrato(data: ContratoFormData) {
@@ -106,7 +177,7 @@ export function NovoContrato() {
     const contrato = buildContrato(data, 'gerado')
     saveContrato(contrato)
     setPreviewContrato(contrato)
-    showToast('Contrato gerado com sucesso!')
+    showToast(isEditing ? 'Contrato atualizado e gerado!' : 'Contrato gerado com sucesso!')
   }
 
   return (
@@ -123,8 +194,16 @@ export function NovoContrato() {
             </svg>
           </button>
           <div>
-            <h1 className="text-2xl font-bold text-white">Novo Contrato</h1>
-            <p className="text-sm text-gray-500">Preencha os dados abaixo para gerar o contrato</p>
+            <h1 className="text-2xl font-bold text-white">
+              {isEditing ? 'Editar Contrato' : baseId ? 'Novo Contrato (usando base)' : 'Novo Contrato'}
+            </h1>
+            <p className="text-sm text-gray-500">
+              {isEditing
+                ? `Editando ${contratoExistente.numero}`
+                : baseId && contratoExistente
+                  ? `Baseado em ${contratoExistente.numero} — será criado como novo contrato`
+                  : 'Preencha os dados abaixo para gerar o contrato'}
+            </p>
           </div>
         </div>
 
@@ -166,13 +245,45 @@ export function NovoContrato() {
             <p className={sectionTitleClass}>2. Cliente (Contratante)</p>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="sm:col-span-2">
-                <label className={labelClass}>Nome completo ou Razão Social *</label>
-                <input {...register('cliente.nome', { required: true })} className={inputClass} placeholder="João da Silva" />
+                <label className={labelClass}>Tipo de Pessoa *</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {(['fisica', 'juridica'] as TipoPessoa[]).map((tipo) => (
+                    <label
+                      key={tipo}
+                      className={`flex cursor-pointer items-center gap-3 rounded-lg border px-4 py-3 transition-colors
+                        ${tipoPessoa === tipo
+                          ? 'border-indigo-500 bg-indigo-900/30 text-indigo-300'
+                          : 'border-gray-700 bg-gray-800/40 text-gray-400 hover:border-gray-600'
+                        }`}
+                    >
+                      <input type="radio" {...register('cliente.tipoPessoa')} value={tipo} className="sr-only" />
+                      <span className="text-sm font-medium">
+                        {tipo === 'fisica' ? 'Pessoa Física' : 'Pessoa Jurídica'}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="sm:col-span-2">
+                <label className={labelClass}>
+                  {tipoPessoa === 'juridica' ? 'Razão Social *' : 'Nome completo *'}
+                </label>
+                <input
+                  {...register('cliente.nome', { required: true })}
+                  className={inputClass}
+                  placeholder={tipoPessoa === 'juridica' ? 'Empresa Ltda.' : 'João da Silva'}
+                />
                 {errors.cliente?.nome && <p className="mt-1 text-xs text-red-400">Obrigatório</p>}
               </div>
               <div>
-                <label className={labelClass}>CPF ou CNPJ *</label>
-                <input {...register('cliente.documento', { required: true })} className={inputClass} placeholder="000.000.000-00" />
+                <label className={labelClass}>
+                  {tipoPessoa === 'juridica' ? 'CNPJ *' : 'CPF *'}
+                </label>
+                <input
+                  {...register('cliente.documento', { required: true })}
+                  className={inputClass}
+                  placeholder={tipoPessoa === 'juridica' ? '00.000.000/0001-00' : '000.000.000-00'}
+                />
                 {errors.cliente?.documento && <p className="mt-1 text-xs text-red-400">Obrigatório</p>}
               </div>
               <div>
@@ -221,14 +332,51 @@ export function NovoContrato() {
                 />
               </div>
               <div>
-                <label className={labelClass}>Data de Início *</label>
-                <input {...register('projeto.dataInicio', { required: true })} type="date" className={inputClass} />
-                {errors.projeto?.dataInicio && <p className="mt-1 text-xs text-red-400">Obrigatório</p>}
+                <label className={labelClass}>Início após assinatura *</label>
+                <div className="flex gap-2">
+                  <input
+                    {...register('projeto.prazoInicio', { required: true, min: 1, valueAsNumber: true })}
+                    type="number"
+                    min={1}
+                    className={`${inputClass} w-24`}
+                    placeholder="7"
+                  />
+                  <select {...register('projeto.unidadeInicio')} className={inputClass}>
+                    <option value="dias">dias</option>
+                    <option value="semanas">semanas</option>
+                  </select>
+                </div>
+                <p className="mt-1 text-xs text-gray-600">Prazo para início do projeto após a assinatura</p>
+                {errors.projeto?.prazoInicio && <p className="mt-1 text-xs text-red-400">Obrigatório</p>}
               </div>
               <div>
-                <label className={labelClass}>Data de Entrega Prevista *</label>
-                <input {...register('projeto.dataEntrega', { required: true })} type="date" className={inputClass} />
-                {errors.projeto?.dataEntrega && <p className="mt-1 text-xs text-red-400">Obrigatório</p>}
+                <label className={labelClass}>Prazo Estimado *</label>
+                <div className="flex gap-2">
+                  <input
+                    {...register('projeto.prazoEstimado', { required: true, min: 1, valueAsNumber: true })}
+                    type="number"
+                    min={1}
+                    className={`${inputClass} w-24`}
+                    placeholder="30"
+                  />
+                  <select {...register('projeto.unidadePrazo')} className={inputClass}>
+                    <option value="dias_uteis">dias úteis</option>
+                    <option value="semanas">semanas</option>
+                    <option value="meses">meses</option>
+                  </select>
+                </div>
+                {errors.projeto?.prazoEstimado && <p className="mt-1 text-xs text-red-400">Obrigatório</p>}
+              </div>
+              <div>
+                <label className={labelClass}>Tolerância (mesma unidade)</label>
+                <input
+                  {...register('projeto.tolerancia', { min: 0, valueAsNumber: true })}
+                  type="number"
+                  min={0}
+                  className={inputClass}
+                  placeholder="5"
+                />
+                <p className="mt-1 text-xs text-gray-600">Margem adicional sem penalidade</p>
               </div>
               <div>
                 <label className={labelClass}>Rodadas de revisão inclusas *</label>
@@ -295,33 +443,207 @@ export function NovoContrato() {
                   ))}
                 </div>
               </div>
-              {modeloPagamento === 'personalizado' && (
-                <div className="sm:col-span-2">
-                  <label className={labelClass}>Descreva as condições de pagamento *</label>
-                  <textarea
-                    {...register('pagamento.modeloPersonalizado')}
-                    rows={3}
-                    className={`${inputClass} resize-none`}
-                    placeholder="Ex: 30% na assinatura, 70% na entrega..."
-                  />
+              <div className="sm:col-span-2">
+                <label className={labelClass}>Etapas de Entrega</label>
+                <p className="text-xs text-gray-500 mb-3">Cada parcela do pagamento é vinculada a uma etapa. Descreva o que será entregue em cada marco.</p>
+                <div className="space-y-2">
+                  {etapasFields.map((field, index) => (
+                    <div key={field.id} className="flex items-start gap-2">
+                      <span className="mt-2.5 text-xs font-bold text-gray-500 w-5 shrink-0 text-right">{index + 1}.</span>
+                      <div className="flex-1 flex gap-2">
+                        <input
+                          {...register(`pagamento.etapas.${index}.descricao`, { required: true })}
+                          className={inputClass}
+                          placeholder={index === 0 ? 'Ex: Assinatura do contrato' : index === etapasFields.length - 1 ? 'Ex: Entrega final do projeto' : 'Ex: Conclusão do backend e integrações'}
+                        />
+                        {modeloPagamento === 'personalizado' ? (
+                          <div className="flex items-center gap-1 shrink-0">
+                            <input
+                              {...register(`pagamento.etapas.${index}.percentual`, { required: true, min: 1, max: 100, valueAsNumber: true })}
+                              type="number"
+                              min={1}
+                              max={100}
+                              className={`${inputClass} w-20 text-center`}
+                            />
+                            <span className="text-xs text-gray-500">%</span>
+                          </div>
+                        ) : (
+                          <span className="mt-2.5 text-xs font-semibold text-indigo-400 w-12 shrink-0 text-center">
+                            {watch(`pagamento.etapas.${index}.percentual`)}%
+                          </span>
+                        )}
+                      </div>
+                      {modeloPagamento === 'personalizado' && etapasFields.length > 2 && (
+                        <button
+                          type="button"
+                          onClick={() => removeEtapa(index)}
+                          className="mt-2 text-gray-600 hover:text-red-400 transition-colors shrink-0"
+                          title="Remover etapa"
+                        >
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  ))}
                 </div>
-              )}
+                {modeloPagamento === 'personalizado' && (
+                  <button
+                    type="button"
+                    onClick={() => appendEtapa({ descricao: '', percentual: 0 })}
+                    className="mt-3 flex items-center gap-1.5 text-xs font-medium text-indigo-400 hover:text-indigo-300 transition-colors"
+                  >
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                    Adicionar etapa
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
-          {/* Seção 5 — Config */}
+          {/* Seção 5 — Serviços Adicionais */}
           <div className={sectionClass}>
-            <p className={sectionTitleClass}>5. Configurações do Contrato</p>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <div className="sm:col-span-1">
+            <p className={sectionTitleClass}>5. Serviços Adicionais</p>
+            <p className="text-xs text-gray-500 mb-4">Defina se hospedagem/domínio e manutenção estão inclusos no contrato</p>
+
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 mb-4">
+              {([
+                { value: 'nenhum', label: 'Não incluir' },
+                { value: 'individual', label: 'Configurar separadamente' },
+                { value: 'pacote', label: 'Pacote completo' },
+              ] as { value: ModoServicos; label: string }[]).map((opt) => (
+                <label
+                  key={opt.value}
+                  className={`flex cursor-pointer items-center gap-3 rounded-lg border px-4 py-3 transition-colors
+                    ${modoServicos === opt.value
+                      ? 'border-indigo-500 bg-indigo-900/30 text-indigo-300'
+                      : 'border-gray-700 bg-gray-800/40 text-gray-400 hover:border-gray-600'
+                    }`}
+                >
+                  <input type="radio" {...register('servicosAdicionais.modo')} value={opt.value} className="sr-only" />
+                  <span className="text-sm font-medium">{opt.label}</span>
+                </label>
+              ))}
+            </div>
+
+            {modoServicos === 'pacote' && (
+              <div className="rounded-lg border border-gray-800 bg-gray-800/30 p-4">
+                <p className="text-sm font-semibold text-white mb-3">Hospedagem, Domínio e Manutenção — Pacote Completo</p>
+                <p className="text-xs text-gray-500 mb-4">Ambos os serviços inclusos juntos, com período e valor mensal unificados após o término</p>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className={labelClass}>Período incluso (meses) *</label>
+                    <input
+                      {...register('servicosAdicionais.pacoteMeses', { required: modoServicos === 'pacote', min: 1, valueAsNumber: true })}
+                      type="number"
+                      min={1}
+                      className={inputClass}
+                      placeholder="12"
+                    />
+                  </div>
+                  <div>
+                    <label className={labelClass}>Valor mensal do pacote após período (R$) *</label>
+                    <input
+                      {...register('servicosAdicionais.pacoteValorMensal', { required: modoServicos === 'pacote', min: 0, valueAsNumber: true })}
+                      type="number"
+                      step="0.01"
+                      min={0}
+                      className={inputClass}
+                      placeholder="350.00"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {modoServicos === 'individual' && (
+              <>
+                <div className="rounded-lg border border-gray-800 bg-gray-800/30 p-4 space-y-4">
+                  <label className="flex cursor-pointer items-center gap-3">
+                    <input
+                      type="checkbox"
+                      {...register('servicosAdicionais.hospedagem.incluso')}
+                      className="h-4 w-4 rounded border-gray-600 bg-gray-700 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-0"
+                    />
+                    <span className="text-sm font-semibold text-white">Incluir Hospedagem e Domínio</span>
+                  </label>
+                  {hospedagemInclusa && (
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 pl-7">
+                      <div>
+                        <label className={labelClass}>Período incluso (meses) *</label>
+                        <input
+                          {...register('servicosAdicionais.hospedagem.meses', { required: hospedagemInclusa, min: 1, valueAsNumber: true })}
+                          type="number"
+                          min={1}
+                          className={inputClass}
+                          placeholder="12"
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass}>Valor mensal após período (R$) *</label>
+                        <input
+                          {...register('servicosAdicionais.hospedagem.valorMensal', { required: hospedagemInclusa, min: 0, valueAsNumber: true })}
+                          type="number"
+                          step="0.01"
+                          min={0}
+                          className={inputClass}
+                          placeholder="89.90"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-lg border border-gray-800 bg-gray-800/30 p-4 space-y-4 mt-2">
+                  <label className="flex cursor-pointer items-center gap-3">
+                    <input
+                      type="checkbox"
+                      {...register('servicosAdicionais.manutencao.incluso')}
+                      className="h-4 w-4 rounded border-gray-600 bg-gray-700 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-0"
+                    />
+                    <span className="text-sm font-semibold text-white">Incluir Manutenção</span>
+                  </label>
+                  {manutencaoInclusa && (
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 pl-7">
+                      <div>
+                        <label className={labelClass}>Período incluso (meses) *</label>
+                        <input
+                          {...register('servicosAdicionais.manutencao.meses', { required: manutencaoInclusa, min: 1, valueAsNumber: true })}
+                          type="number"
+                          min={1}
+                          className={inputClass}
+                          placeholder="3"
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass}>Valor mensal após período (R$) *</label>
+                        <input
+                          {...register('servicosAdicionais.manutencao.valorMensal', { required: manutencaoInclusa, min: 0, valueAsNumber: true })}
+                          type="number"
+                          step="0.01"
+                          min={0}
+                          className={inputClass}
+                          placeholder="250.00"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Seção 6 — Config */}
+          <div className={sectionClass}>
+            <p className={sectionTitleClass}>6. Configurações do Contrato</p>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
                 <label className={labelClass}>Cidade (para foro) *</label>
                 <input {...register('config.cidade', { required: true })} className={inputClass} placeholder="São Paulo" />
                 {errors.config?.cidade && <p className="mt-1 text-xs text-red-400">Obrigatório</p>}
-              </div>
-              <div>
-                <label className={labelClass}>Data de Assinatura *</label>
-                <input {...register('config.dataAssinatura', { required: true })} type="date" className={inputClass} />
-                {errors.config?.dataAssinatura && <p className="mt-1 text-xs text-red-400">Obrigatório</p>}
               </div>
               <div>
                 <label className={labelClass}>Validade da proposta (dias) *</label>
@@ -344,7 +666,7 @@ export function NovoContrato() {
               onClick={handleSubmit(onSalvarRascunho)}
               className="rounded-lg border border-gray-700 px-6 py-3 text-sm font-semibold text-gray-300 hover:bg-gray-800 transition-colors"
             >
-              Salvar como Rascunho
+              {isEditing ? 'Salvar Alterações' : 'Salvar como Rascunho'}
             </button>
             <button
               type="button"

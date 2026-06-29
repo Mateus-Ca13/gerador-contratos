@@ -6,7 +6,10 @@ export interface Prestador {
   telefone: string
 }
 
+export type TipoPessoa = 'fisica' | 'juridica'
+
 export interface Cliente {
+  tipoPessoa: TipoPessoa
   nome: string
   documento: string
   endereco: string
@@ -14,29 +17,56 @@ export interface Cliente {
   telefone: string
 }
 
+export type UnidadePrazo = 'dias_uteis' | 'semanas' | 'meses'
+
+export type UnidadeInicio = 'dias' | 'semanas'
+
 export interface Projeto {
   nome: string
   descricao: string
   exclusoes: string
-  dataInicio: string
-  dataEntrega: string
+  prazoInicio: number
+  unidadeInicio: UnidadeInicio
+  prazoEstimado: number
+  unidadePrazo: UnidadePrazo
+  tolerancia: number
   rodasRevisao: number
 }
 
 export type ModeloPagamento = '50/50' | '33/33/33' | 'personalizado'
 export type FormaPagamento = 'PIX' | 'Transferência bancária' | 'Outro'
 
+export interface EtapaPagamento {
+  descricao: string
+  percentual: number
+}
+
 export interface Pagamento {
   valorTotal: number
   modelo: ModeloPagamento
-  modeloPersonalizado: string
+  etapas: EtapaPagamento[]
   forma: FormaPagamento
   formaOutro: string
 }
 
+export interface ServicoAdicional {
+  incluso: boolean
+  meses: number
+  valorMensal: number
+}
+
+export type ModoServicos = 'nenhum' | 'individual' | 'pacote'
+
+export interface ServicosAdicionais {
+  modo: ModoServicos
+  hospedagem: ServicoAdicional
+  manutencao: ServicoAdicional
+  pacoteMeses: number
+  pacoteValorMensal: number
+}
+
 export interface ConfigContrato {
   cidade: string
-  dataAssinatura: string
   prazoValidade: number
 }
 
@@ -51,6 +81,7 @@ export interface Contrato {
   cliente: Cliente
   projeto: Projeto
   pagamento: Pagamento
+  servicosAdicionais: ServicosAdicionais
   config: ConfigContrato
 }
 

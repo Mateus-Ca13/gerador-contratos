@@ -3,10 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import type { Contrato } from '../types'
-import { getHistorico, deleteContrato, saveContrato, gerarNumeroContrato } from '../storage'
+import { getHistorico, deleteContrato } from '../storage'
 import { Toast } from '../components/Toast'
 import { PDFPreviewModal } from '../components/PDFPreviewModal'
-import { v4 as uuidv4 } from 'uuid'
 
 type ToastState = { message: string; type: 'success' | 'error' } | null
 
@@ -31,17 +30,12 @@ export function Home() {
     showToast('Contrato excluído.')
   }
 
-  function handleDuplicate(contrato: Contrato) {
-    const novo: Contrato = {
-      ...contrato,
-      id: uuidv4(),
-      numero: gerarNumeroContrato(),
-      createdAt: new Date().toISOString(),
-      status: 'rascunho',
-    }
-    saveContrato(novo)
-    setHistorico(getHistorico())
-    showToast('Contrato duplicado como rascunho!')
+  function handleEdit(contrato: Contrato) {
+    navigate(`/editar/${contrato.id}`)
+  }
+
+  function handleUseAsBase(contrato: Contrato) {
+    navigate(`/novo?base=${contrato.id}`)
   }
 
   return (
@@ -135,9 +129,19 @@ export function Home() {
                     Ver PDF
                   </button>
                   <button
-                    onClick={() => handleDuplicate(contrato)}
+                    onClick={() => handleEdit(contrato)}
                     className="rounded-lg border border-gray-700 p-1.5 text-gray-400 hover:bg-gray-800 hover:text-white transition-colors"
-                    title="Duplicar"
+                    title="Editar contrato"
+                  >
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={() => handleUseAsBase(contrato)}
+                    className="rounded-lg border border-gray-700 p-1.5 text-gray-400 hover:bg-gray-800 hover:text-white transition-colors"
+                    title="Usar como base para novo contrato"
                   >
                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}

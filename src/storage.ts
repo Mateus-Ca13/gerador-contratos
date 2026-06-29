@@ -36,6 +36,10 @@ export function saveContrato(contrato: Contrato): void {
   localStorage.setItem(KEY_HISTORICO, JSON.stringify(historico))
 }
 
+export function getContrato(id: string): Contrato | null {
+  return getHistorico().find((c) => c.id === id) || null
+}
+
 export function deleteContrato(id: string): void {
   const historico = getHistorico().filter((c) => c.id !== id)
   localStorage.setItem(KEY_HISTORICO, JSON.stringify(historico))

@@ -7,7 +7,7 @@ import {
 } from '@react-pdf/renderer'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
-import type { Contrato } from './types'
+import type { Contrato, UnidadePrazo, UnidadeInicio } from './types'
 
 const styles = StyleSheet.create({
   page: {
@@ -19,28 +19,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 52,
     lineHeight: 1.5,
   },
-  header: {
-    marginBottom: 24,
-    borderBottomWidth: 2,
-    borderBottomColor: '#1a1a1a',
-    paddingBottom: 10,
-  },
-  headerCompany: {
-    fontSize: 14,
-    fontFamily: 'Helvetica-Bold',
-    color: '#111',
-  },
-  headerCnpj: {
-    fontSize: 9,
-    color: '#555',
-    marginTop: 2,
-  },
   title: {
     fontSize: 12,
     fontFamily: 'Helvetica-Bold',
     textAlign: 'center',
     marginBottom: 4,
-    marginTop: 20,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
@@ -122,6 +105,40 @@ function formatDate(dateStr: string): string {
   }
 }
 
+function numeroPorExtenso(n: number, feminino = false): string {
+  if (n === 0) return 'zero'
+  if (n === 100) return 'cem'
+
+  const unidades = feminino
+    ? ['', 'uma', 'duas', 'três', 'quatro', 'cinco', 'seis', 'sete', 'oito', 'nove']
+    : ['', 'um', 'dois', 'três', 'quatro', 'cinco', 'seis', 'sete', 'oito', 'nove']
+  const especiais = ['dez', 'onze', 'doze', 'treze', 'quatorze', 'quinze', 'dezesseis', 'dezessete', 'dezoito', 'dezenove']
+  const dezenas = ['', '', 'vinte', 'trinta', 'quarenta', 'cinquenta', 'sessenta', 'setenta', 'oitenta', 'noventa']
+  const centenas = feminino
+    ? ['', 'cento', 'duzentas', 'trezentas', 'quatrocentas', 'quinhentas', 'seiscentas', 'setecentas', 'oitocentas', 'novecentas']
+    : ['', 'cento', 'duzentos', 'trezentos', 'quatrocentos', 'quinhentos', 'seiscentos', 'setecentos', 'oitocentos', 'novecentos']
+
+  const partes: string[] = []
+  let resto = n
+
+  if (resto >= 100) {
+    partes.push(centenas[Math.floor(resto / 100)])
+    resto = resto % 100
+  }
+
+  if (resto >= 20) {
+    partes.push(dezenas[Math.floor(resto / 10)])
+    resto = resto % 10
+    if (resto > 0) partes.push(unidades[resto])
+  } else if (resto >= 10) {
+    partes.push(especiais[resto - 10])
+  } else if (resto > 0) {
+    partes.push(unidades[resto])
+  }
+
+  return partes.join(' e ')
+}
+
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat('pt-BR', {
     style: 'currency',
@@ -129,20 +146,43 @@ function formatCurrency(value: number): string {
   }).format(value)
 }
 
+function formatUnidadePrazo(valor: number, unidade: UnidadePrazo): string {
+  const femininas: Record<UnidadePrazo, boolean> = { dias_uteis: false, semanas: true, meses: false }
+  const labels: Record<UnidadePrazo, [string, string]> = {
+    dias_uteis: ['dia útil', 'dias úteis'],
+    semanas: ['semana', 'semanas'],
+    meses: ['mês', 'meses'],
+  }
+  const [singular, plural] = labels[unidade]
+  return `${valor} (${numeroPorExtenso(valor, femininas[unidade])}) ${valor === 1 ? singular : plural}`
+}
+
+function formatPrazoInicio(valor: number, unidade: UnidadeInicio): string {
+  const femininas: Record<UnidadeInicio, boolean> = { dias: false, semanas: true }
+  const labels: Record<UnidadeInicio, [string, string]> = {
+    dias: ['dia', 'dias'],
+    semanas: ['semana', 'semanas'],
+  }
+  const [singular, plural] = labels[unidade]
+  return `${valor} (${numeroPorExtenso(valor, femininas[unidade])}) ${valor === 1 ? singular : plural}`
+}
+
 function buildModeloPagamentoText(contrato: Contrato): string {
-  const { modelo, modeloPersonalizado, valorTotal, forma, formaOutro } = contrato.pagamento
+  const { etapas, valorTotal, forma, formaOutro } = contrato.pagamento
   const total = formatCurrency(valorTotal)
   const formaTxt = forma === 'Outro' ? formaOutro : forma
 
-  if (modelo === '50/50') {
-    const parcela = formatCurrency(valorTotal / 2)
-    return `O valor total do contrato é de ${total}, a ser pago em duas parcelas: ${parcela} no ato da assinatura e ${parcela} na entrega final do projeto. Forma de pagamento: ${formaTxt}.`
+  if (!etapas || etapas.length === 0) {
+    return `O valor total do contrato é de ${total}. Forma de pagamento: ${formaTxt}.`
   }
-  if (modelo === '33/33/33') {
-    const parcela = formatCurrency(valorTotal / 3)
-    return `O valor total do contrato é de ${total}, a ser pago em três parcelas de ${parcela}: a primeira no ato da assinatura, a segunda no meio do desenvolvimento e a terceira na entrega final. Forma de pagamento: ${formaTxt}.`
-  }
-  return `O valor total do contrato é de ${total}. Condições de pagamento: ${modeloPersonalizado}. Forma de pagamento: ${formaTxt}.`
+
+  const letra = (i: number) => String.fromCharCode(97 + i)
+  const linhas = etapas.map((etapa, i) => {
+    const valor = formatCurrency(valorTotal * etapa.percentual / 100)
+    return `${letra(i)}) ${etapa.percentual}% (${valor}) — ${etapa.descricao || 'A definir'}`
+  }).join(';\n')
+
+  return `O valor total do contrato é de ${total}, a ser pago em ${etapas.length} (${numeroPorExtenso(etapas.length, true)}) parcela(s) conforme as seguintes etapas de entrega:\n\n${linhas}.\n\nForma de pagamento: ${formaTxt}.`
 }
 
 interface Props {
@@ -150,18 +190,19 @@ interface Props {
 }
 
 export function ContratoPDF({ contrato }: Props) {
-  const { prestador, cliente, projeto, config, numero } = contrato
+  const { prestador, cliente, projeto, config, numero, servicosAdicionais } = contrato
   const dataGeracao = format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })
+  const docLabel = cliente.tipoPessoa === 'juridica' ? 'CNPJ' : 'CPF'
+
+  const modoServicos = servicosAdicionais?.modo || 'nenhum'
+  const temServicosAdicionais = modoServicos === 'pacote' || (modoServicos === 'individual' && (servicosAdicionais?.hospedagem?.incluso || servicosAdicionais?.manutencao?.incluso))
+
+  let cl = 0
+  const nextCl = () => { cl++; return cl }
 
   return (
     <Document>
       <Page size="A4" style={styles.page}>
-        {/* Cabeçalho */}
-        <View style={styles.header}>
-          <Text style={styles.headerCompany}>{prestador.razaoSocial}</Text>
-          <Text style={styles.headerCnpj}>CNPJ: {prestador.cnpj}</Text>
-        </View>
-
         {/* Título */}
         <Text style={styles.title}>
           Contrato de Prestação de Serviços{'\n'}de Desenvolvimento de Software
@@ -170,21 +211,21 @@ export function ContratoPDF({ contrato }: Props) {
 
         <View style={styles.divider} />
 
-        {/* Cláusula 1 — Das Partes */}
+        {/* Cláusula — Das Partes */}
         <View style={styles.section}>
-          <Text style={styles.clauseTitle}>CLÁUSULA 1ª — DAS PARTES</Text>
+          <Text style={styles.clauseTitle}>CLÁUSULA {nextCl()}ª — DAS PARTES</Text>
           <Text style={styles.clauseText}>
             {`CONTRATADA: ${prestador.razaoSocial}, inscrita no CNPJ sob o nº ${prestador.cnpj}, com sede em ${prestador.endereco}, e-mail: ${prestador.email}, telefone: ${prestador.telefone}.`}
             {'\n\n'}
-            {`CONTRATANTE: ${cliente.nome}, inscrito(a) no CPF/CNPJ sob o nº ${cliente.documento}, residente/domiciliado(a) em ${cliente.endereco}, e-mail: ${cliente.email}, telefone: ${cliente.telefone}.`}
+            {`CONTRATANTE: ${cliente.nome}, ${cliente.tipoPessoa === 'juridica' ? 'inscrita' : 'inscrito(a)'} no ${docLabel} sob o nº ${cliente.documento}, ${cliente.tipoPessoa === 'juridica' ? 'com sede em' : 'residente/domiciliado(a) em'} ${cliente.endereco}, e-mail: ${cliente.email}, telefone: ${cliente.telefone}.`}
             {'\n\n'}
             {`As partes acima qualificadas celebram o presente contrato, que se regerá pelas cláusulas seguintes.`}
           </Text>
         </View>
 
-        {/* Cláusula 2 — Do Objeto */}
+        {/* Cláusula — Do Objeto */}
         <View style={styles.section}>
-          <Text style={styles.clauseTitle}>CLÁUSULA 2ª — DO OBJETO</Text>
+          <Text style={styles.clauseTitle}>CLÁUSULA {nextCl()}ª — DO OBJETO</Text>
           <Text style={styles.clauseText}>
             {`O presente contrato tem por objeto a prestação de serviços de desenvolvimento de software referente ao projeto "${projeto.nome}", conforme escopo detalhado a seguir:`}
             {'\n\n'}
@@ -193,19 +234,22 @@ export function ContratoPDF({ contrato }: Props) {
           </Text>
         </View>
 
-        {/* Cláusula 3 — Do Prazo */}
+        {/* Cláusula — Do Prazo */}
         <View style={styles.section}>
-          <Text style={styles.clauseTitle}>CLÁUSULA 3ª — DO PRAZO</Text>
+          <Text style={styles.clauseTitle}>CLÁUSULA {nextCl()}ª — DO PRAZO</Text>
           <Text style={styles.clauseText}>
-            {`Os serviços terão início em ${formatDate(projeto.dataInicio)} e a entrega está prevista para ${formatDate(projeto.dataEntrega)}.`}
+            {`Os serviços terão início em até ${formatPrazoInicio(projeto.prazoInicio, projeto.unidadeInicio)} após a assinatura do presente contrato por ambas as partes, condicionado ao recebimento do pagamento da entrada e à aprovação formal do escopo pelo CONTRATANTE.`}
             {'\n\n'}
-            {`O prazo acima será contado a partir do recebimento do pagamento da entrada e da aprovação formal do escopo pelo CONTRATANTE. Eventuais atrasos causados pelo CONTRATANTE (atraso em aprovações, fornecimento de conteúdo, etc.) não serão imputados à CONTRATADA.`}
+            {`O prazo estimado para a conclusão dos serviços é de ${formatUnidadePrazo(projeto.prazoEstimado, projeto.unidadePrazo)}, contados a partir do efetivo início dos trabalhos.`}
+            {projeto.tolerancia > 0 && ` O prazo poderá ser estendido em até ${formatUnidadePrazo(projeto.tolerancia, projeto.unidadePrazo)} adicionais sem ônus para a CONTRATADA, totalizando um prazo máximo de ${formatUnidadePrazo(projeto.prazoEstimado + projeto.tolerancia, projeto.unidadePrazo)}.`}
+            {'\n\n'}
+            {`Eventuais atrasos causados pelo CONTRATANTE (atraso em aprovações, fornecimento de conteúdo, etc.) não serão imputados à CONTRATADA e poderão resultar na prorrogação proporcional do prazo de entrega.`}
           </Text>
         </View>
 
-        {/* Cláusula 4 — Do Valor e Pagamento */}
+        {/* Cláusula — Do Valor e Pagamento */}
         <View style={styles.section}>
-          <Text style={styles.clauseTitle}>CLÁUSULA 4ª — DO VALOR E DO PAGAMENTO</Text>
+          <Text style={styles.clauseTitle}>CLÁUSULA {nextCl()}ª — DO VALOR E DO PAGAMENTO</Text>
           <Text style={styles.clauseText}>
             {buildModeloPagamentoText(contrato)}
             {'\n\n'}
@@ -213,9 +257,30 @@ export function ContratoPDF({ contrato }: Props) {
           </Text>
         </View>
 
-        {/* Cláusula 5 — Da Propriedade Intelectual */}
+        {/* Cláusula condicional — Da Hospedagem, Domínio e Manutenção */}
+        {temServicosAdicionais && (
+          <View style={styles.section}>
+            <Text style={styles.clauseTitle}>CLÁUSULA {nextCl()}ª — DA HOSPEDAGEM, DOMÍNIO E MANUTENÇÃO</Text>
+            <Text style={styles.clauseText}>
+              {modoServicos === 'pacote' && (
+                `A CONTRATADA fornecerá serviço de hospedagem, registro de domínio e manutenção corretiva e preventiva do software pelo período de ${servicosAdicionais.pacoteMeses} (${numeroPorExtenso(servicosAdicionais.pacoteMeses)}) ${servicosAdicionais.pacoteMeses === 1 ? 'mês' : 'meses'} a contar da entrega final do projeto, inclusos no valor contratado. A infraestrutura contempla rotinas de backup periódico dos dados armazenados. Entende-se por manutenção a correção de bugs, ajustes de desempenho e pequenas melhorias que não alterem o escopo original.\n\nApós o término desse período, o CONTRATANTE poderá renovar ambos os serviços em conjunto mediante contratação à parte pelo valor mensal de ${formatCurrency(servicosAdicionais.pacoteValorMensal)}, sujeito a reajuste anual.`
+              )}
+              {modoServicos === 'individual' && servicosAdicionais.hospedagem?.incluso && (
+                `A CONTRATADA fornecerá serviço de hospedagem e registro de domínio pelo período de ${servicosAdicionais.hospedagem.meses} (${numeroPorExtenso(servicosAdicionais.hospedagem.meses)}) ${servicosAdicionais.hospedagem.meses === 1 ? 'mês' : 'meses'} a contar da entrega final do projeto, incluso no valor contratado. A infraestrutura contempla rotinas de backup periódico dos dados armazenados. Após o término desse período, o CONTRATANTE poderá renovar o serviço mediante contratação à parte pelo valor mensal de ${formatCurrency(servicosAdicionais.hospedagem.valorMensal)}, sujeito a reajuste anual.`
+              )}
+              {modoServicos === 'individual' && servicosAdicionais.hospedagem?.incluso && servicosAdicionais.manutencao?.incluso && '\n\n'}
+              {modoServicos === 'individual' && servicosAdicionais.manutencao?.incluso && (
+                `A CONTRATADA fornecerá serviço de manutenção corretiva e preventiva do software pelo período de ${servicosAdicionais.manutencao.meses} (${numeroPorExtenso(servicosAdicionais.manutencao.meses)}) ${servicosAdicionais.manutencao.meses === 1 ? 'mês' : 'meses'} a contar da entrega final do projeto, incluso no valor contratado. Entende-se por manutenção a correção de bugs, ajustes de desempenho e pequenas melhorias que não alterem o escopo original. Após o término desse período, o CONTRATANTE poderá renovar o serviço mediante contratação à parte pelo valor mensal de ${formatCurrency(servicosAdicionais.manutencao.valorMensal)}, sujeito a reajuste anual.`
+              )}
+              {'\n\n'}
+              {`A não renovação dos serviços acima após o período incluso não gera qualquer ônus ao CONTRATANTE, ficando a CONTRATADA desobrigada da prestação dos respectivos serviços.`}
+            </Text>
+          </View>
+        )}
+
+        {/* Cláusula — Da Propriedade Intelectual */}
         <View style={styles.section}>
-          <Text style={styles.clauseTitle}>CLÁUSULA 5ª — DA PROPRIEDADE INTELECTUAL</Text>
+          <Text style={styles.clauseTitle}>CLÁUSULA {nextCl()}ª — DA PROPRIEDADE INTELECTUAL</Text>
           <Text style={styles.clauseText}>
             {`Todo o código-fonte, designs e demais materiais produzidos no âmbito deste contrato serão de propriedade exclusiva do CONTRATANTE somente após a quitação integral do valor contratado.`}
             {'\n\n'}
@@ -225,31 +290,67 @@ export function ContratoPDF({ contrato }: Props) {
           </Text>
         </View>
 
-        {/* Cláusula 6 — Das Revisões */}
+        {/* Cláusula — Das Revisões */}
         <View style={styles.section}>
-          <Text style={styles.clauseTitle}>CLÁUSULA 6ª — DAS REVISÕES</Text>
+          <Text style={styles.clauseTitle}>CLÁUSULA {nextCl()}ª — DAS REVISÕES</Text>
           <Text style={styles.clauseText}>
-            {`Este contrato prevê ${projeto.rodasRevisao} (${projeto.rodasRevisao === 1 ? 'uma' : projeto.rodasRevisao}) rodada(s) de revisão incluída(s) no valor contratado.`}
+            {`Este contrato prevê ${projeto.rodasRevisao} (${numeroPorExtenso(projeto.rodasRevisao, true)}) rodada(s) de revisão incluída(s) no valor contratado.`}
             {'\n\n'}
             {`Entende-se por "revisão" ajustes e correções dentro do escopo originalmente aprovado. Alterações de escopo, adição de funcionalidades ou mudanças de direcionamento após o início do desenvolvimento serão tratadas como aditivo contratual, com novo orçamento e prazo.`}
           </Text>
         </View>
 
-        {/* Cláusula 7 — Da Aprovação Tácita */}
+        {/* Cláusula — Da Entrega e Critérios de Aceite */}
         <View style={styles.section}>
-          <Text style={styles.clauseTitle}>CLÁUSULA 7ª — DA APROVAÇÃO TÁCITA</Text>
+          <Text style={styles.clauseTitle}>CLÁUSULA {nextCl()}ª — DA ENTREGA E DOS CRITÉRIOS DE ACEITE</Text>
           <Text style={styles.clauseText}>
-            {`A cada entrega parcial ou final realizada pela CONTRATADA, o CONTRATANTE terá o prazo de 5 (cinco) dias úteis para apresentar feedback formal por escrito (e-mail ou mensagem registrada).`}
+            {`Considera-se o sistema (ou etapa) entregue quando a CONTRATADA disponibilizar o software em ambiente acessível ao CONTRATANTE (homologação ou produção) e comunicar formalmente a conclusão, indicando o que foi implementado.`}
             {'\n\n'}
-            {`Transcorrido esse prazo sem manifestação do CONTRATANTE, a entrega será considerada tacitamente aprovada, liberando a CONTRATADA para prosseguir para a etapa seguinte e, no caso de entrega final, para emitir a cobrança da parcela correspondente.`}
+            {`O sistema será considerado funcional e apto à aprovação quando atender simultaneamente aos seguintes critérios:`}
+            {'\n'}
+            {`a) operar em conformidade com as funcionalidades descritas no escopo contratado;`}
+            {'\n'}
+            {`b) estar livre de defeitos críticos que impeçam o uso das funcionalidades contratadas;`}
+            {'\n'}
+            {`c) estar acessível e utilizável no ambiente acordado entre as partes.`}
             {'\n\n'}
-            {`A aprovação tácita não prejudica o direito à rodada de revisão prevista na Cláusula 6ª, desde que solicitada dentro do prazo contratual.`}
+            {`Eventuais rejeições por parte do CONTRATANTE deverão ser formalizadas por escrito (e-mail ou mensagem registrada), com descrição objetiva do problema encontrado, incluindo: qual funcionalidade apresentou falha, qual o comportamento esperado e qual o comportamento observado. Comunicações genéricas como "não funciona" ou "não está pronto", sem detalhamento, não serão consideradas rejeições válidas.`}
+            {'\n\n'}
+            {`Não constituem motivo válido para rejeição de entrega: solicitações de funcionalidades não previstas no escopo, preferências estéticas subjetivas não acordadas previamente, comparações com outros sistemas, nem quaisquer demandas que configurem alteração ou ampliação do escopo original.`}
+            {'\n\n'}
+            {`Os critérios acima aplicam-se tanto às entregas parciais (vinculadas às etapas de pagamento) quanto à entrega final do projeto.`}
           </Text>
         </View>
 
-        {/* Cláusula 8 — Da Confidencialidade */}
+        {/* Cláusula — Da Garantia */}
         <View style={styles.section}>
-          <Text style={styles.clauseTitle}>CLÁUSULA 8ª — DA CONFIDENCIALIDADE</Text>
+          <Text style={styles.clauseTitle}>CLÁUSULA {nextCl()}ª — DA GARANTIA</Text>
+          <Text style={styles.clauseText}>
+            {`A CONTRATADA oferece garantia de 60 (sessenta) dias corridos sobre o produto entregue, contados a partir da data de entrega final e aprovação (expressa ou tácita) do projeto.`}
+            {'\n\n'}
+            {`Durante o período de garantia, a CONTRATADA compromete-se a corrigir, sem custo adicional, eventuais defeitos de funcionamento (bugs), falhas técnicas e comportamentos inesperados do software que estejam em desacordo com o escopo originalmente contratado.`}
+            {'\n\n'}
+            {`Não estão cobertos pela garantia: solicitações de novas funcionalidades, alterações de layout, adição ou remoção de campos, integrações não previstas no escopo original, nem quaisquer outras modificações que configurem alteração ou ampliação do escopo contratado. Tais demandas serão tratadas como novo orçamento.`}
+            {'\n\n'}
+            {`A garantia também não se aplica a problemas decorrentes de alterações realizadas no software por terceiros ou pelo próprio CONTRATANTE sem autorização prévia da CONTRATADA.`}
+          </Text>
+        </View>
+
+        {/* Cláusula — Da Aprovação Tácita */}
+        <View style={styles.section}>
+          <Text style={styles.clauseTitle}>CLÁUSULA {nextCl()}ª — DA APROVAÇÃO TÁCITA</Text>
+          <Text style={styles.clauseText}>
+            {`A cada entrega parcial ou final realizada pela CONTRATADA, o CONTRATANTE terá o prazo de 7 (sete) dias corridos para apresentar feedback formal por escrito (e-mail ou mensagem registrada).`}
+            {'\n\n'}
+            {`Transcorrido esse prazo sem manifestação do CONTRATANTE, a entrega será considerada tacitamente aprovada, liberando a CONTRATADA para prosseguir para a etapa seguinte e, no caso de entrega final, para emitir a cobrança da parcela correspondente.`}
+            {'\n\n'}
+            {`A aprovação tácita não prejudica o direito às rodadas de revisão previstas neste contrato, desde que solicitadas dentro do prazo contratual.`}
+          </Text>
+        </View>
+
+        {/* Cláusula — Da Confidencialidade */}
+        <View style={styles.section}>
+          <Text style={styles.clauseTitle}>CLÁUSULA {nextCl()}ª — DA CONFIDENCIALIDADE</Text>
           <Text style={styles.clauseText}>
             {`Ambas as partes comprometem-se a manter em sigilo todas as informações confidenciais trocadas durante a vigência deste contrato, incluindo dados técnicos, estratégicos, comerciais e financeiros, não as divulgando a terceiros sem prévia autorização por escrito da outra parte.`}
             {'\n\n'}
@@ -257,9 +358,31 @@ export function ContratoPDF({ contrato }: Props) {
           </Text>
         </View>
 
-        {/* Cláusula 9 — Da Rescisão */}
+        {/* Cláusula — Da Proteção de Dados (LGPD) */}
         <View style={styles.section}>
-          <Text style={styles.clauseTitle}>CLÁUSULA 9ª — DA RESCISÃO</Text>
+          <Text style={styles.clauseTitle}>CLÁUSULA {nextCl()}ª — DA PROTEÇÃO DE DADOS (LGPD)</Text>
+          <Text style={styles.clauseText}>
+            {`A CONTRATADA compromete-se a desenvolver o software em conformidade com a Lei Geral de Proteção de Dados Pessoais (Lei nº 13.709/2018 — LGPD), adotando as melhores práticas de privacidade e segurança da informação aplicáveis ao projeto.`}
+            {'\n\n'}
+            {`Dentre as medidas aplicáveis, incluem-se:`}
+            {'\n'}
+            {`a) tratamento de dados pessoais com base nas hipóteses legais previstas na LGPD;`}
+            {'\n'}
+            {`b) implementação de mecanismos de controle de acesso e autenticação segura;`}
+            {'\n'}
+            {`c) criptografia de dados sensíveis em trânsito e em repouso, quando aplicável;`}
+            {'\n'}
+            {`d) rotinas de backup periódico dos dados armazenados, como parte da infraestrutura fornecida;`}
+            {'\n'}
+            {`e) registro e rastreabilidade de operações relevantes (logs de auditoria).`}
+            {'\n\n'}
+            {`O CONTRATANTE é responsável por definir sua política de privacidade, termos de uso e base legal para coleta de dados dos seus próprios usuários. A CONTRATADA poderá orientar tecnicamente, mas a responsabilidade jurídica perante os titulares dos dados é do CONTRATANTE enquanto controlador dos dados.`}
+          </Text>
+        </View>
+
+        {/* Cláusula — Da Rescisão */}
+        <View style={styles.section}>
+          <Text style={styles.clauseTitle}>CLÁUSULA {nextCl()}ª — DA RESCISÃO</Text>
           <Text style={styles.clauseText}>
             {`Qualquer das partes poderá rescindir o presente contrato mediante aviso prévio de 15 (quinze) dias.`}
             {'\n\n'}
@@ -269,9 +392,9 @@ export function ContratoPDF({ contrato }: Props) {
           </Text>
         </View>
 
-        {/* Cláusula 10 — Das Penalidades por Descumprimento */}
+        {/* Cláusula — Das Penalidades por Descumprimento */}
         <View style={styles.section}>
-          <Text style={styles.clauseTitle}>CLÁUSULA 10ª — DAS PENALIDADES POR DESCUMPRIMENTO</Text>
+          <Text style={styles.clauseTitle}>CLÁUSULA {nextCl()}ª — DAS PENALIDADES POR DESCUMPRIMENTO</Text>
           <Text style={styles.clauseText}>
             {`O descumprimento de qualquer obrigação prevista neste contrato, por qualquer das partes, sem justificativa aceita pela outra parte, sujeitará o infrator ao pagamento de multa não compensatória equivalente a 10% (dez por cento) do valor total do contrato, sem prejuízo das perdas e danos que forem apurados.`}
             {'\n\n'}
@@ -281,23 +404,23 @@ export function ContratoPDF({ contrato }: Props) {
           </Text>
         </View>
 
-        {/* Cláusula 11 — Das Disposições Gerais */}
+        {/* Cláusula — Das Disposições Gerais */}
         <View style={styles.section}>
-          <Text style={styles.clauseTitle}>CLÁUSULA 11ª — DAS DISPOSIÇÕES GERAIS</Text>
+          <Text style={styles.clauseTitle}>CLÁUSULA {nextCl()}ª — DAS DISPOSIÇÕES GERAIS</Text>
           <Text style={styles.clauseText}>
             {`Qualquer alteração ao presente contrato somente será válida mediante aditivo escrito, assinado por ambas as partes.`}
             {'\n\n'}
-            {`Este contrato tem validade de ${config.prazoValidade} (${config.prazoValidade}) dias a partir da data de assinatura. Caso não executado neste prazo, os valores e condições aqui estabelecidos poderão ser revistos pela CONTRATADA.`}
+            {`Este contrato tem validade de ${config.prazoValidade} (${numeroPorExtenso(config.prazoValidade)}) dias a partir da data de assinatura. Caso não executado neste prazo, os valores e condições aqui estabelecidos poderão ser revistos pela CONTRATADA.`}
             {'\n\n'}
             {`As partes elegem o foro da Comarca de ${config.cidade} para dirimir quaisquer controvérsias decorrentes deste contrato, com renúncia expressa a qualquer outro, por mais privilegiado que seja.`}
           </Text>
         </View>
 
-        {/* Cláusula 12 — Das Assinaturas */}
+        {/* Cláusula — Das Assinaturas */}
         <View style={[styles.section, styles.signatureSection]}>
-          <Text style={styles.clauseTitle}>CLÁUSULA 12ª — DAS ASSINATURAS</Text>
+          <Text style={styles.clauseTitle}>CLÁUSULA {nextCl()}ª — DAS ASSINATURAS</Text>
           <Text style={styles.clauseText}>
-            {`Por estarem assim justos e contratados, as partes assinam o presente instrumento em duas vias de igual teor e forma, na cidade de ${config.cidade}, em ${formatDate(config.dataAssinatura)}.`}
+            {`Por estarem assim justos e contratados, as partes assinam o presente instrumento em duas vias de igual teor e forma, na cidade de ${config.cidade}, em ${formatDate(new Date().toISOString().split('T')[0])}.`}
           </Text>
           <View style={styles.signatureRow}>
             <View style={styles.signatureBlock}>
@@ -309,7 +432,7 @@ export function ContratoPDF({ contrato }: Props) {
             <View style={styles.signatureBlock}>
               <View style={styles.signatureLine} />
               <Text style={styles.signatureName}>{cliente.nome}</Text>
-              <Text style={styles.signatureLabel}>CPF/CNPJ: {cliente.documento}</Text>
+              <Text style={styles.signatureLabel}>{docLabel}: {cliente.documento}</Text>
               <Text style={styles.signatureLabel}>CONTRATANTE</Text>
             </View>
           </View>
